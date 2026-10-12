@@ -1,6 +1,5 @@
 import hashlib
 import io
-import json
 import tempfile
 import unittest
 import zipfile
@@ -20,17 +19,43 @@ from scripts.sync_releases import (
 )
 
 
-def release(tag, *, prerelease=False, draft=False, with_assets=True):
+def release(
+    tag,
+    *,
+    prerelease=False,
+    draft=False,
+    with_assets=True,
+    published_at="2026-10-10T09:22:39Z",
+    zip_id=101,
+    digest_id=102,
+    zip_digest="a" * 64,
+    digest_digest="b" * 64,
+):
     assets = []
     if with_assets:
         assets = [
-            {"name": ASSET_NAME, "browser_download_url": f"https://example.test/{tag}.zip"},
-            {"name": DIGEST_NAME, "browser_download_url": f"https://example.test/{tag}.dgst"},
+            {
+                "id": zip_id,
+                "name": ASSET_NAME,
+                "size": 100,
+                "digest": f"sha256:{zip_digest}",
+                "updated_at": published_at,
+                "browser_download_url": f"https://example.test/{tag}.zip",
+            },
+            {
+                "id": digest_id,
+                "name": DIGEST_NAME,
+                "size": 100,
+                "digest": f"sha256:{digest_digest}",
+                "updated_at": published_at,
+                "browser_download_url": f"https://example.test/{tag}.dgst",
+            },
         ]
     return {
         "tag_name": tag,
         "name": f"Xray {tag}",
         "html_url": f"https://github.com/XTLS/Xray-core/releases/tag/{tag}",
+        "published_at": published_at,
         "prerelease": prerelease,
         "draft": draft,
         "assets": assets,
@@ -47,39 +72,63 @@ class VersionTests(unittest.TestCase):
 
 
 class PlanningTests(unittest.TestCase):
-    def test_empty_destination_bootstraps_only_latest_published_release(self):
-        upstream = [
-            release("v26.10.10", prerelease=True),
-            release("v26.9.30", prerelease=False),
-        ]
-        plan = plan_releases(upstream, set())
-        self.assertEqual([item["tag_name"] for item in plan], ["v26.10.10"])
-        self.assertTrue(plan[0]["prerelease"])
+    START = "2026-10-10T09:22:39Z"
 
-    def test_imports_all_releases_newer_than_last_mirrored_oldest_first(self):
+    def test_empty_destination_restores_every_release_in_range(self):
         upstream = [
-            release("v26.12.1", prerelease=False),
-            release("v26.11.2", prerelease=True),
-            release("v26.10.10", prerelease=True),
+            release("v2", prerelease=True, published_at="2026-10-12T00:00:00Z"),
+            release("v1", published_at=self.START),
+            release("v0", published_at="2026-09-01T00:00:00Z"),
         ]
-        plan = plan_releases(upstream, {"v26.10.10"})
-        self.assertEqual(
-            [item["tag_name"] for item in plan],
-            ["v26.11.2", "v26.12.1"],
-        )
+        plan = plan_releases(upstream, set(), self.START)
+        self.assertEqual([item["tag_name"] for item in plan], ["v1", "v2"])
+        self.assertTrue(plan[-1]["prerelease"])
 
-    def test_fills_gaps_within_existing_mirror_history(self):
-        upstream = [release("v4"), release("v3"), release("v2"), release("v1")]
-        plan = plan_releases(upstream, {"v3", "v1"})
+    def test_imports_all_newer_releases_oldest_first(self):
+        upstream = [
+            release("v3", published_at="2026-10-13T00:00:00Z"),
+            release("v2", prerelease=True, published_at="2026-10-12T00:00:00Z"),
+            release("v1", published_at=self.START),
+        ]
+        plan = plan_releases(upstream, {"v1"}, self.START)
+        self.assertEqual([item["tag_name"] for item in plan], ["v2", "v3"])
+
+    def test_fills_gaps_within_mirror_range(self):
+        upstream = [
+            release("v4", published_at="2026-10-14T00:00:00Z"),
+            release("v3", published_at="2026-10-13T00:00:00Z"),
+            release("v2", published_at="2026-10-12T00:00:00Z"),
+            release("v1", published_at=self.START),
+        ]
+        plan = plan_releases(upstream, {"v3", "v1"}, self.START)
         self.assertEqual([item["tag_name"] for item in plan], ["v2", "v4"])
 
-    def test_skips_drafts_and_releases_missing_required_assets(self):
+    def test_no_shared_tag_recovers_every_release_since_durable_boundary(self):
         upstream = [
-            release("v3", draft=True),
-            release("v2", with_assets=False),
-            release("v1"),
+            release("v4", published_at="2026-10-14T00:00:00Z"),
+            release("v3", published_at="2026-10-13T00:00:00Z"),
+            release("v2", published_at="2026-10-12T00:00:00Z"),
         ]
-        plan = plan_releases(upstream, set())
+        plan = plan_releases(upstream, {"withdrawn-v1"}, "2026-10-12T00:00:00Z")
+        self.assertEqual([item["tag_name"] for item in plan], ["v2", "v3", "v4"])
+
+    def test_sorts_by_published_time_instead_of_api_order(self):
+        upstream = [
+            release("v2", published_at="2026-10-12T00:00:00Z"),
+            release("v3", published_at="2026-10-13T00:00:00Z"),
+            release("v1", published_at=self.START),
+        ]
+        plan = plan_releases(upstream, {"v1"}, self.START)
+        self.assertEqual([item["tag_name"] for item in plan], ["v2", "v3"])
+
+    def test_skips_drafts_missing_assets_and_pre_boundary_releases(self):
+        upstream = [
+            release("v3", draft=True, published_at="2026-10-13T00:00:00Z"),
+            release("v2", with_assets=False, published_at="2026-10-12T00:00:00Z"),
+            release("v1", published_at=self.START),
+            release("v0", published_at="2026-09-01T00:00:00Z"),
+        ]
+        plan = plan_releases(upstream, set(), self.START)
         self.assertEqual([item["tag_name"] for item in plan], ["v1"])
 
 
@@ -148,50 +197,61 @@ class GitHubClientTests(unittest.TestCase):
 
 
 class PayloadTests(unittest.TestCase):
-    def test_preserves_upstream_prerelease_status(self):
+    def test_preserves_status_and_records_upstream_provenance(self):
         item = release("v26.10.10", prerelease=True)
-        payload = build_release_payload(item, "b" * 64)
+        payload = build_release_payload(item, "c" * 64)
         self.assertEqual(payload["tag_name"], "v26.10.10")
         self.assertTrue(payload["prerelease"])
         self.assertFalse(payload["draft"])
-        self.assertIn("SHA-256 бинарника: `" + "b" * 64 + "`", payload["body"])
+        self.assertIn("SHA-256 бинарника: `" + "c" * 64 + "`", payload["body"])
+        self.assertIn('"zip_asset_id":101', payload["body"])
+        self.assertIn('"digest_asset_id":102', payload["body"])
 
 
 class ReconciliationTests(unittest.TestCase):
+    def destination(self, upstream, binary_sha="c" * 64):
+        payload = build_release_payload(upstream, binary_sha)
+        return {
+            "tag_name": upstream["tag_name"],
+            "name": upstream["name"],
+            "draft": False,
+            "prerelease": upstream["prerelease"],
+            "body": payload["body"],
+            "assets": [
+                {
+                    "name": version_from_tag(upstream["tag_name"]),
+                    "digest": "sha256:" + binary_sha,
+                }
+            ],
+        }
+
     def test_exact_verified_asset_does_not_need_sync(self):
         upstream = release("v26.10.10", prerelease=True)
-        destination = {
-            "tag_name": "v26.10.10",
-            "name": "Xray v26.10.10",
-            "draft": False,
-            "prerelease": True,
-            "body": "SHA-256 бинарника: `" + "c" * 64 + "`",
-            "assets": [{"name": "26.10.10", "digest": "sha256:" + "c" * 64}],
-        }
-        self.assertFalse(release_needs_sync(upstream, destination))
+        self.assertFalse(release_needs_sync(upstream, self.destination(upstream)))
 
     def test_corrupted_existing_asset_needs_sync(self):
         upstream = release("v26.10.10", prerelease=True)
-        destination = {
-            "tag_name": "v26.10.10",
-            "name": "Xray v26.10.10",
-            "draft": False,
-            "prerelease": True,
-            "body": "SHA-256 бинарника: `" + "c" * 64 + "`",
-            "assets": [{"name": "26.10.10", "digest": "sha256:" + "d" * 64}],
-        }
+        destination = self.destination(upstream)
+        destination["assets"][0]["digest"] = "sha256:" + "d" * 64
         self.assertTrue(release_needs_sync(upstream, destination))
 
+    def test_upstream_asset_replacement_needs_sync(self):
+        original = release("v26.10.10", prerelease=True)
+        destination = self.destination(original)
+        replaced = release(
+            "v26.10.10",
+            prerelease=True,
+            zip_id=201,
+            digest_id=202,
+            zip_digest="d" * 64,
+            digest_digest="e" * 64,
+        )
+        self.assertTrue(release_needs_sync(replaced, destination))
+
     def test_existing_draft_needs_sync(self):
-        upstream = release("v26.10.10", prerelease=False)
-        destination = {
-            "tag_name": "v26.10.10",
-            "name": "Xray v26.10.10",
-            "draft": True,
-            "prerelease": False,
-            "body": "SHA-256 бинарника: `" + "e" * 64 + "`",
-            "assets": [{"name": "26.10.10", "digest": "sha256:" + "e" * 64}],
-        }
+        upstream = release("v26.10.10")
+        destination = self.destination(upstream)
+        destination["draft"] = True
         self.assertTrue(release_needs_sync(upstream, destination))
 
 
