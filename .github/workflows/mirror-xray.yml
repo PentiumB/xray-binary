@@ -1,0 +1,35 @@
+name: Mirror Xray Linux 64 releases
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/mirror-xray.yml"
+      - "scripts/sync_releases.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-xray-releases
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Mirror official Xray release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/sync_releases.py
