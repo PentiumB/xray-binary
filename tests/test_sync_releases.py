@@ -198,6 +198,22 @@ class GitHubClientTests(unittest.TestCase):
 
 
 class PayloadTests(unittest.TestCase):
+    def test_geodata_snippet_contains_dynamic_url_and_binary_digest(self):
+        import json
+        import re
+
+        for tag, sha in [("v1.2.3", "d" * 64), ("v9.8.7", "e" * 64)]:
+            with self.subTest(tag=tag):
+                payload = build_release_payload(release(tag), sha)
+                block = re.search(r"```json\n(.*?)\n```", payload["body"], re.S)
+                self.assertIsNotNone(block)
+                assert block is not None
+                config = json.loads(block.group(1))
+                self.assertEqual(config, {"geodata": {
+                    "core": {"url": f"https://github.com/PentiumB/xray-binary/releases/download/{tag}/Xray-linux-64", "sha256": sha},
+                    "outbound": "direct",
+                }})
+
     def test_preserves_status_and_records_upstream_provenance(self):
         item = release("v26.10.10", prerelease=True)
         payload = build_release_payload(item, "c" * 64)
@@ -232,6 +248,17 @@ class ReconciliationTests(unittest.TestCase):
         destination["assets"][0]["name"] = "Xray-linux-64"
         self.assertFalse(release_needs_sync(upstream, destination))
         destination["assets"][0]["name"] = "26.10.10"
+        self.assertTrue(release_needs_sync(upstream, destination))
+
+    def test_legacy_description_without_geodata_needs_sync(self):
+        import re
+
+        upstream = release("v1.2.3")
+        destination = self.destination(upstream)
+        destination["body"] = re.sub(
+            r"### Конфигурация Remnawave Node.*?(?=<!--)",
+            "", destination["body"], flags=re.S,
+        )
         self.assertTrue(release_needs_sync(upstream, destination))
 
     def test_exact_verified_asset_does_not_need_sync(self):

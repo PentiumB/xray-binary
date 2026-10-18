@@ -126,6 +126,16 @@ def build_release_payload(release: dict[str, Any], binary_sha256: str) -> dict[s
     tag = release["tag_name"]
     source_url = release.get("html_url", f"https://github.com/{UPSTREAM_REPOSITORY}/releases/tag/{tag}")
     provenance = json.dumps(upstream_provenance(release), sort_keys=True, separators=(",", ":"))
+    destination = os.environ.get("GITHUB_REPOSITORY", "PentiumB/xray-binary")
+    encoded_tag = urllib.parse.quote(tag, safe="")
+    config = {"geodata": {
+        "core": {
+            "url": f"https://github.com/{destination}/releases/download/{encoded_tag}/{BINARY_NAME}",
+            "sha256": binary_sha256,
+        },
+        "outbound": "direct",
+    }}
+    snippet = json.dumps(config, indent=2, ensure_ascii=False)
     return {
         "tag_name": tag,
         "name": release.get("name") or tag,
@@ -133,6 +143,9 @@ def build_release_payload(release: dict[str, Any], binary_sha256: str) -> dict[s
             "Автоматически извлечённый без изменений файл `xray` из официального "
             f"архива `{ASSET_NAME}`.\n\n"
             f"SHA-256 бинарника: `{binary_sha256}`\n\nИсточник: {source_url}\n\n"
+            "### Конфигурация Remnawave Node\n\n"
+            "Добавьте поле `geodata` в конфигурацию:\n\n"
+            f"```json\n{snippet}\n```\n\n"
             f"<!-- xray-mirror-provenance:{provenance} -->"
         ),
         "draft": False,
@@ -166,7 +179,10 @@ def release_needs_sync(upstream: dict[str, Any], destination: dict[str, Any]) ->
     if recorded_provenance != upstream_provenance(upstream):
         return True
 
-    expected_digest = f"sha256:{binary_match.group(1).lower()}"
+    binary_sha256 = binary_match.group(1).lower()
+    if body != build_release_payload(upstream, binary_sha256)["body"]:
+        return True
+    expected_digest = f"sha256:{binary_sha256}"
     return (assets[0].get("digest") or "").lower() != expected_digest
 
 
