@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from scripts.sync_releases import (
     ASSET_NAME,
+    BINARY_NAME,
     DIGEST_NAME,
     GitHubClient,
     build_release_payload,
@@ -137,7 +138,7 @@ class ArchiveTests(unittest.TestCase):
         digest = "MD5= deadbeef\nSHA2-256= " + "a" * 64 + "\n"
         self.assertEqual(parse_sha256(digest), "a" * 64)
 
-    def test_extracts_only_xray_and_names_it_as_version(self):
+    def test_extracts_only_xray_with_fixed_asset_name(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as zf:
             zf.writestr("xray", b"official binary")
@@ -147,10 +148,10 @@ class ArchiveTests(unittest.TestCase):
         expected = hashlib.sha256(archive.getvalue()).hexdigest()
         with tempfile.TemporaryDirectory() as tmp:
             output = extract_xray(archive.getvalue(), expected, "26.10.10", Path(tmp))
-            self.assertEqual(output.name, "26.10.10")
+            self.assertEqual(output.name, "Xray-linux-64")
             self.assertEqual(output.read_bytes(), b"official binary")
             self.assertEqual(output.stat().st_mode & 0o777, 0o755)
-            self.assertEqual([p.name for p in Path(tmp).iterdir()], ["26.10.10"])
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], ["Xray-linux-64"])
 
     def test_rejects_archive_with_wrong_digest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -219,11 +220,19 @@ class ReconciliationTests(unittest.TestCase):
             "body": payload["body"],
             "assets": [
                 {
-                    "name": version_from_tag(upstream["tag_name"]),
+                    "name": BINARY_NAME,
                     "digest": "sha256:" + binary_sha,
                 }
             ],
         }
+
+    def test_fixed_asset_name_is_accepted_and_legacy_name_is_migrated(self):
+        upstream = release("v26.10.10", prerelease=True)
+        destination = self.destination(upstream)
+        destination["assets"][0]["name"] = "Xray-linux-64"
+        self.assertFalse(release_needs_sync(upstream, destination))
+        destination["assets"][0]["name"] = "26.10.10"
+        self.assertTrue(release_needs_sync(upstream, destination))
 
     def test_exact_verified_asset_does_not_need_sync(self):
         upstream = release("v26.10.10", prerelease=True)

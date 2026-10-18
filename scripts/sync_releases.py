@@ -19,6 +19,7 @@ from typing import Any
 
 UPSTREAM_REPOSITORY = "XTLS/Xray-core"
 ASSET_NAME = "Xray-linux-64.zip"
+BINARY_NAME = "Xray-linux-64"
 DIGEST_NAME = f"{ASSET_NAME}.dgst"
 API_ROOT = "https://api.github.com"
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]*$")
@@ -91,7 +92,7 @@ def extract_xray(zip_bytes: bytes, expected_sha256: str, version: str, output_di
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / version
+    output_path = output_dir / BINARY_NAME
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
         names = archive.namelist()
         if names.count("xray") != 1:
@@ -140,7 +141,7 @@ def build_release_payload(release: dict[str, Any], binary_sha256: str) -> dict[s
 
 
 def release_needs_sync(upstream: dict[str, Any], destination: dict[str, Any]) -> bool:
-    version = version_from_tag(upstream["tag_name"])
+    version_from_tag(upstream["tag_name"])
     expected_name = upstream.get("name") or upstream["tag_name"]
     if destination.get("name") != expected_name:
         return True
@@ -150,7 +151,7 @@ def release_needs_sync(upstream: dict[str, Any], destination: dict[str, Any]) ->
         return True
 
     assets = destination.get("assets", [])
-    if len(assets) != 1 or assets[0].get("name") != version:
+    if len(assets) != 1 or assets[0].get("name") != BINARY_NAME:
         return True
 
     body = destination.get("body") or ""
@@ -291,7 +292,7 @@ def prepare_binary(
             archive, expected_archive_sha256, version, Path(directory)
         )
         binary = binary_path.read_bytes()
-    return version, binary, hashlib.sha256(binary).hexdigest()
+    return BINARY_NAME, binary, hashlib.sha256(binary).hexdigest()
 
 
 def ensure_release(
@@ -305,7 +306,7 @@ def ensure_release(
     # Verify and prepare the official binary before creating or modifying a
     # public destination release. A failed download or digest check leaves the
     # destination untouched.
-    version, binary, binary_sha256 = prepare_binary(client, upstream)
+    filename, binary, binary_sha256 = prepare_binary(client, upstream)
     payload = build_release_payload(upstream, binary_sha256)
 
     staging_payload = dict(payload)
@@ -333,7 +334,7 @@ def ensure_release(
 
     client.request(
         "POST",
-        upload_url(release, version),
+        upload_url(release, filename),
         content_type="application/octet-stream",
         raw_body=binary,
     )
@@ -350,11 +351,11 @@ def ensure_release(
     published_assets = published.get("assets", [])
     if published.get("draft") or bool(published.get("prerelease")) != payload["prerelease"]:
         raise RuntimeError(f"published release {tag} has incorrect release status")
-    if len(published_assets) != 1 or published_assets[0].get("name") != version:
-        raise RuntimeError(f"published release {tag} does not contain exactly asset {version}")
+    if len(published_assets) != 1 or published_assets[0].get("name") != filename:
+        raise RuntimeError(f"published release {tag} does not contain exactly asset {filename}")
     if (published_assets[0].get("digest") or "").lower() != f"sha256:{binary_sha256}":
         raise RuntimeError(f"published release {tag} asset digest does not match upload")
-    print(f"Published and verified official binary {version} in {tag}")
+    print(f"Published and verified official binary {filename} in {tag}")
 
 
 def draft_withdrawn_release(
@@ -410,7 +411,7 @@ def main() -> int:
                 {
                     "tag": latest["tag_name"],
                     "prerelease": bool(latest["prerelease"]),
-                    "binary_name": version_from_tag(latest["tag_name"]),
+                    "binary_name": BINARY_NAME,
                     "zip_asset": zip_asset["name"],
                     "digest_asset": digest_asset["name"],
                 },
