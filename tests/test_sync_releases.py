@@ -211,7 +211,6 @@ class PayloadTests(unittest.TestCase):
                 config = json.loads(block.group(1))
                 self.assertEqual(config, {"geodata": {
                     "core": {"url": f"https://github.com/PentiumB/xray-binary/releases/download/{tag}/Xray-linux-64", "sha256": sha},
-                    "outbound": "direct",
                 }})
 
     def test_preserves_status_and_records_upstream_provenance(self):
@@ -248,6 +247,16 @@ class ReconciliationTests(unittest.TestCase):
         destination["assets"][0]["name"] = "Xray-linux-64"
         self.assertFalse(release_needs_sync(upstream, destination))
         destination["assets"][0]["name"] = "26.10.10"
+        self.assertTrue(release_needs_sync(upstream, destination))
+
+    def test_legacy_outbound_example_needs_sync(self):
+        upstream = release("v1.2.3")
+        destination = self.destination(upstream)
+        destination["body"] = destination["body"].replace(
+            '"sha256": "' + "c" * 64 + '"\n    }',
+            '"sha256": "' + "c" * 64 + '"\n    },\n    "outbound": "direct"',
+        )
+        self.assertIn('"outbound": "direct"', destination["body"])
         self.assertTrue(release_needs_sync(upstream, destination))
 
     def test_legacy_description_without_geodata_needs_sync(self):

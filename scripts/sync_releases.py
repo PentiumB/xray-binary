@@ -133,7 +133,6 @@ def build_release_payload(release: dict[str, Any], binary_sha256: str) -> dict[s
             "url": f"https://github.com/{destination}/releases/download/{encoded_tag}/{BINARY_NAME}",
             "sha256": binary_sha256,
         },
-        "outbound": "direct",
     }}
     snippet = json.dumps(config, indent=2, ensure_ascii=False)
     return {
